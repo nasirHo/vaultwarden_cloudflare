@@ -55,10 +55,10 @@ Only the `/admin` path is protected; do **not** put Access in front of the whole
 Then also set an `ADMIN_TOKEN` (defense in depth). Generate an argon2 hash:
 
 ```sh
-docker run --rm -it vaultwarden/server /vaultwarden hash
+docker run --rm -it vaultwarden/server:1.37.5-alpine /vaultwarden hash
 ```
 
-and put it in `.env` **in single quotes**, e.g. `ADMIN_TOKEN='$argon2id$v=19$m=65540,...'`. Leave it as `''` to disable the admin page entirely.
+and put it in `vaultwarden.env` **in single quotes**, e.g. `ADMIN_TOKEN='$argon2id$v=19$m=65540,...'`. Leave the line commented out to disable the admin page entirely.
 
 ### 4. Fail2Ban API token
 
@@ -99,8 +99,9 @@ docker compose start vaultwarden
 ### 6. Start
 
 ```sh
-cp .env.template .env   # fill it in
-chmod 600 .env          # it holds the admin token and Cloudflare tokens
+cp .env.template .env                           # stack settings: domain, Cloudflare, backups
+cp vaultwarden.env.template vaultwarden.env     # Vaultwarden settings: admin token, push, SMTP, ...
+chmod 600 .env vaultwarden.env                  # both hold secrets
 docker compose up -d --build
 docker compose logs -f vaultwarden
 ```
@@ -125,3 +126,12 @@ Container stdout logs (`docker compose logs`) are capped separately in `docker-c
 3. **Check `config.json`**: settings saved via the admin page override environment variables (domain, admin token, SMTP, ...). Edit or remove stale entries.
 4. Use the same or a newer Vaultwarden version than the old server; database migrations only go forward.
 5. Do not carry over TLS settings (`ROCKET_TLS`, certificates) — Cloudflare terminates TLS and the container serves plain HTTP inside the docker network.
+
+### Configuration files
+
+| File | Holds | Notes |
+|---|---|---|
+| `.env` | Stack settings: `DOMAIN`, `TZ`, Cloudflare tokens, backup settings | Used by docker compose for `${...}` substitution only; not passed wholesale to any container. |
+| `vaultwarden.env` | Vaultwarden's own settings: `ADMIN_TOKEN`, `SIGNUPS_ALLOWED`, `PUSH_*`, `SMTP_*`, `YUBICO_*`, ... | Passed as-is to the Vaultwarden container. Any option from [Vaultwarden's .env.template](https://github.com/dani-garcia/vaultwarden/blob/main/.env.template) works. **Comment out unused settings instead of leaving them empty** — e.g. an empty `YUBICO_SERVER=` makes Vaultwarden refuse to start. |
+
+When migrating from a native install, most lines of the old Vaultwarden `.env` (e.g. `PUSH_*`, `ADMIN_TOKEN`) can be copied into `vaultwarden.env` as-is; leave out `ROCKET_*`, `DATA_FOLDER`, `WEB_VAULT_*` and `DOMAIN`.
