@@ -2,10 +2,20 @@
 
 [vaultwarden]
 enabled = true
-port = 80,443,8081
+port = 80,443
 filter = vaultwarden
-action = cloudflare
-logpath = /vaultwarden/vaultwarden.log
+action = cloudflare-zone-token
+logpath = /logs/vaultwarden.log
 maxretry = 5
+bantime = 6h
+findtime = 6h
+
+[vaultwarden-admin]
+enabled = true
+port = 80,443
+filter = vaultwarden-admin
+action = cloudflare-zone-token
+logpath = /logs/vaultwarden.log
+maxretry = 3
 bantime = 6h
 findtime = 6h

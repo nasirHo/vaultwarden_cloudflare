@@ -1,6 +1,31 @@
+# Easiest way to fill this in: run `rclone config` on any machine with a
+# browser, create the remotes below, then copy the resulting rclone.conf here.
+
+# 1. The storage backend (Google Drive here; any rclone backend works)
 [gdrive]
 type = drive
 client_id =
 client_secret =
-scope =
+scope = drive.file
 token =
+
+# 2. Encryption layer on top of it. Backups contain the whole vault database
+#    and rsa_key.pem, so point BACKUP_RCLONE_REMOTE_NAME at THIS remote.
+#
+#    Generate the values with:  rclone obscure "$(openssl rand -base64 32)"
+#    (run it twice: once for password, once for password2)
+#
+#    !!! Save the two plain (un-obscured) passwords somewhere OUTSIDE this
+#    !!! vault (printed, or another password manager). If the VM is lost and
+#    !!! the passwords only lived in rclone.conf and in Vaultwarden itself,
+#    !!! the backups cannot be decrypted.
+#
+#    filename_encryption = off keeps file names (dates) readable in Drive;
+#    file contents are still encrypted.
+[gdrive-crypt]
+type = crypt
+remote = gdrive:vaultwarden
+filename_encryption = off
+directory_name_encryption = false
+password =
+password2 =

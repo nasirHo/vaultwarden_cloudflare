@@ -1,0 +1,3 @@
+# Log files (vaultwarden.log + rotations), everything can be ignored
+*
+!.gitignore

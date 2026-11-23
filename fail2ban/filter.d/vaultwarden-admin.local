@@ -1,0 +1,9 @@
+# path_f2b/filter.d/vaultwarden-admin.local
+# Matches: "Invalid admin token. IP: 1.2.3.4" (src/api/admin.rs)
+
+[INCLUDES]
+before = common.conf
+
+[Definition]
+failregex = ^.*Invalid admin token\. IP: <ADDR>\s*$
+ignoreregex =

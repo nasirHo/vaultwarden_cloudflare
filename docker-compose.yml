@@ -1,102 +1,113 @@
+# Image versions are pinned on purpose: updates are manual (see README "Updating").
+
+# Cap docker's own (stdout) logs; the default json-file driver never rotates.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   vaultwarden:
-    image: vaultwarden/server:alpine
+    image: vaultwarden/server:1.37.5-alpine
     container_name: vaultwarden
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    # The image ships a HEALTHCHECK (/healthcheck.sh), used by depends_on below.
     volumes:
-      - ${PWD}/vaultwarden/:/data/
+      - ./vaultwarden:/data
+      - ./logs:/logs
     environment:
-      - DOMAIN=https://${DOMAIN}
-      - LOG_FILE=/data/vaultwarden.log
+      - DOMAIN=https://${DOMAIN:?DOMAIN must be set in .env}
+      - LOG_FILE=/logs/vaultwarden.log
       - SMTP_FROM_NAME=Vaultwarden (${DOMAIN})
+      # cloudflared connects from inside the docker network, which the default
+      # IP_HEADER_TRUSTED_PROXIES=local already trusts
       - IP_HEADER=CF-Connecting-IP
-      - WEBSOCKET_ENABLED=true
-      - SIGNUPS_ALLOWED
-      - YUBICO_CLIENT_ID
-      - YUBICO_SECRET_KEY
-      - YUBICO_SERVER
-      - ORG_CREATION_USERS
-      - SHOW_PASSWORD_HINT
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - SIGNUPS_ALLOWED=${SIGNUPS_ALLOWED:-false}
+      - SHOW_PASSWORD_HINT=${SHOW_PASSWORD_HINT:-false}
+      - ORG_CREATION_USERS=${ORG_CREATION_USERS:-}
+      - YUBICO_CLIENT_ID=${YUBICO_CLIENT_ID:-}
+      - YUBICO_SECRET_KEY=${YUBICO_SECRET_KEY:-}
+      - YUBICO_SERVER=${YUBICO_SERVER:-}
+      - TZ=${TZ:-UTC}
     networks:
       - vwd
 
   cloudflared:
-    image: cloudflare/cloudflared
+    image: cloudflare/cloudflared:2026.11.1
     container_name: cloudflared
-    restart: always
-    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN:?CF_TUNNEL_TOKEN must be set in .env}
     depends_on:
-      - vaultwarden
+      vaultwarden:
+        condition: service_healthy
     networks:
       - vwd
 
   rclone:
-    image: rclone/rclone
+    # rclone + sqlite/zip/unzip baked in at build time (see images/rclone-backup)
+    build:
+      context: ./images/rclone-backup
+      args:
+        RCLONE_VERSION: 1.76.0
+    image: vaultwarden-backup:rclone-1.76.0
     container_name: rclone
-    restart: always
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    init: true # Needed for SIGTERM to stop process to prevent timeouts
     depends_on:
       - vaultwarden
     volumes:
-      - ${PWD}/vaultwarden/:/data/
-      - ${PWD}/backup/:/backup/
-      - ${PWD}/utils/backup.sh:/etc/periodic/${BACKUP_FREQUENCY}/backup:ro
-      - ${PWD}/rclone:/config/
+      # Read-only is enough: the backup uses `VACUUM INTO` (works on a live WAL db)
+      - ./vaultwarden:/data:ro
+      - ./backup:/backup
+      - ./utils/backup.sh:/etc/periodic/${BACKUP_FREQUENCY:?BACKUP_FREQUENCY must be set in .env}/backup:ro
+      # Read-write: rclone refreshes the OAuth token and writes it back
+      - ./rclone:/config
     environment:
-      - BACKUP_ENABLED
-      - BACKUP_DIR
-      - BACKUP_DATA_DIR
-      - BACKUP_RCLONE_CONFIG
-      - BACKUP_RCLONE_REMOTE_NAME
-      - BACKUP_RCLONE_REMOTE_PATH
-      - TZ
-    entrypoint: ["/bin/sh" , "-c", "apk --update --no-cache add sqlite zip && crond -fS"] 
-    init: true # Needed for SIGTERM to stop process to prevent timeouts
-    networks:
-      - vwd
+      - BACKUP_ENABLED=${BACKUP_ENABLED:-true}
+      - BACKUP_DIR=${BACKUP_DIR:-/backup}
+      - BACKUP_DATA_DIR=${BACKUP_DATA_DIR:-/data}
+      - BACKUP_RCLONE_CONFIG=${BACKUP_RCLONE_CONFIG:-/config/rclone.conf}
+      - BACKUP_RCLONE_REMOTE_NAME=${BACKUP_RCLONE_REMOTE_NAME:-}
+      - BACKUP_RCLONE_REMOTE_PATH=${BACKUP_RCLONE_REMOTE_PATH:-}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
+      - BACKUP_HEALTHCHECK_URL=${BACKUP_HEALTHCHECK_URL:-}
+      - TZ=${TZ:-UTC}
+    # No `networks:` -> default network; it only needs outbound internet.
 
   fail2ban:
-    image: crazymax/fail2ban
+    image: crazymax/fail2ban:1.1.1
     container_name: fail2ban
-    restart: always
-    depends_on:
-      - vaultwarden
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    # Bans are done via the Cloudflare API (traffic arrives through the tunnel,
+    # so host iptables would never see client IPs): no NET_ADMIN / host network.
     environment:
-      - PUID
-      - PGID
-      - CF_USER
-      - CF_TOKEN
+      - CF_ZONE_ID=${CF_ZONE_ID:?CF_ZONE_ID must be set in .env}
+      - CF_API_TOKEN=${CF_API_TOKEN:?CF_API_TOKEN must be set in .env}
       - F2B_LOG_TARGET=/data/fail2ban.log
-      - TZ
+      - TZ=${TZ:-UTC}
     volumes:
-      - ${PWD}/fail2ban:/data
-      - ${PWD}/vaultwarden:/vaultwarden:ro
-    networks:
-      - vwd
-
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    restart: always
-    depends_on:
-      - vaultwarden
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_CLEANUP=true
-      - TZ
-    networks:
-      - vwd
-
-  portainer:
-    image: portainer/portainer-ce
-    container_name: portainer
-    restart: always
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${PWD}//portainer:/data
-    networks:
-      - vwd
+      - ./fail2ban:/data
+      # Only the log folder; fail2ban never sees the vault data / rsa key
+      - ./logs:/logs:ro
+    # No `networks:` -> default network; it only needs outbound internet.
 
 networks:
   vwd:
